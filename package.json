@@ -15,7 +15,21 @@
     "commands": [{
       "command": "kivy-editor.start",
       "title": "Start Kivy Editor"
-    }]
+    }],
+    "viewsContainers": {
+    "activitybar": [{
+        "id": "kivyEditorSidebar",
+        "title": "Kivy Editor",
+        "icon": "media/icon.svg"
+      }]
+  },
+  "views": {
+    "kivyEditorSidebar": [{
+        "id": "kivyEditorView",
+        "name": "Editor",
+        "type": "webview"
+      }]
+    }
   },
   "scripts": {
     "lint": "eslint .",
