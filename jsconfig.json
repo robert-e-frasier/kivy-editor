@@ -4,9 +4,13 @@
 		"target": "ES2022",
 		"checkJs": true,  /* Typecheck .js files. */
 		"lib": [
-			"ES2022"
+			"ES2022",
+			"dom"
 		]
 	},
+	"include":[
+		"media/*.js"
+	],
 	"exclude": [
 		"node_modules"
 	]

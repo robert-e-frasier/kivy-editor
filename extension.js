@@ -1,30 +1,87 @@
 const vscode = require('vscode');
 const { exec } = require('child_process');
+const path = require('path');
+const fs = require('fs');
+const { generateKvFromWidgets } = require('./src/kvGenerator');
 
-/**
- * @param {vscode.ExtensionContext} context
- */
+
+let selectedKvUri = null;
+
+function getWebviewContent(context, webview) {
+	const htmlPath = path.join(context.extensionPath, 'html', 'editor.html');
+	let html = fs.readFileSync(htmlPath, 'utf8');
+
+	const cssPath = vscode.Uri.file(path.join(context.extensionPath, 'media', 'editor.css'));
+	const jsPath = vscode.Uri.file(path.join(context.extensionPath, 'media', 'editor.js'));
+
+	const cssUri = webview.asWebviewUri(cssPath);
+	const jsUri = webview.asWebviewUri(jsPath);
+
+	html = html.replace('</head>', `<link rel="stylesheet" href="${cssUri}">\n</head>`);
+	html = html.replace('</body>', `<script src="${jsUri}"></script>\n</body>`);
+
+	return html;
+}
+
+let currentPanel = null; // <-- Add this at the top level (outside activate)
+
 function activate(context) {
 	console.log('Kivy Editor extension is active.');
 
-	// Register the sidebar launcher
-	const sidebarLauncher = new KivySidebarLauncher();
+	const sidebarLauncher = new KivySidebarLauncher(context);
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider("kivyEditorView", sidebarLauncher)
 	);
 
-
-	// Register the main Kivy Editor command
-	const disposable = vscode.commands.registerCommand('kivy-editor.start', function () {
+	const disposable = vscode.commands.registerCommand('kivy-editor.start', () => {
 		checkKivy(isInstalled => {
 			if (isInstalled) {
-				const panel = vscode.window.createWebviewPanel(
+				// If the panel already exists, just reveal it
+				if (currentPanel) {
+					currentPanel.reveal(vscode.ViewColumn.One);
+					return;
+				}
+
+				// Otherwise, create a new panel
+				currentPanel = vscode.window.createWebviewPanel(
 					'kivyEditor',
 					'Kivy Editor',
 					vscode.ViewColumn.One,
-					{ enableScripts: true }
+					{ 
+						enableScripts: true,
+						retainContextWhenHidden: true
+					 }
 				);
-				panel.webview.html = getWebviewContent();
+
+				currentPanel.webview.html = getWebviewContent(context, currentPanel.webview);
+
+				currentPanel.onDidDispose(() => {
+					currentPanel = null; // Clear reference when user closes it
+				});
+
+				currentPanel.webview.onDidReceiveMessage(message => {
+					if (message.command === 'selectKvFile') {
+						vscode.window.showOpenDialog({
+							canSelectMany: false,
+							openLabel: 'Open .kv File',
+							filters: { 'KV files': ['kv'] }
+						}).then(fileUri => {
+							if (fileUri && fileUri[0]) {
+								selectedKvUri = fileUri[0];
+								currentPanel.webview.postMessage({
+									command: 'kvFileSelected',
+									path: fileUri[0].fsPath
+								});
+							}
+						});
+					}
+
+					if (message.command === 'submitKvLayout') {
+						const kvCode = generateKvFromWidgets(message.widgets);
+						fs.writeFileSync(selectedKvUri.fsPath, kvCode, 'utf-8');
+						vscode.window.showInformationMessage('KV layout submitted successfully!');
+					}
+				});
 			} else {
 				vscode.window.showWarningMessage(
 					'Kivy is not installed. Click here to install it.',
@@ -33,7 +90,6 @@ function activate(context) {
 					if (selection === 'Install Kivy') {
 						installKivy();
 						vscode.window.showInformationMessage('Installing Kivy... check the terminal for progress.');
-
 						vscode.window.showWarningMessage(
 							'Once installation is complete, please restart VS Code to activate the Kivy Editor.',
 							'OK'
@@ -44,72 +100,64 @@ function activate(context) {
 		});
 	});
 
-
 	context.subscriptions.push(disposable);
 }
 
-function getSidebarHtml(kivyInstalled) {
-	const message = kivyInstalled
-		? `<h3>Kivy is installed 🎉</h3>
-		   <button onclick="vscode.postMessage({ command: 'openEditor' })">Open Kivy Editor</button>`
-		: `<h3>Kivy is not installed</h3>
-		   <p>Click below to install Kivy. Then restart VS Code.</p>
-		   <button onclick="vscode.postMessage({ command: 'installKivy' })">Install Kivy</button>`;
-
-	return `
-		<!DOCTYPE html>
-		<html lang="en">
-		<head>
-			<meta charset="UTF-8">
-			<meta name="viewport" content="width=device-width, initial-scale=1.0">
-		</head>
-		<body style="padding: 10px; font-family: sans-serif;">
-			${message}
-			<script>
-				const vscode = acquireVsCodeApi();
-			</script>
-		</body>
-		</html>
-	`;
-}
-
-
 class KivySidebarLauncher {
+	constructor(context) {
+		this.context = context;
+	}
+
 	resolveWebviewView(webviewView) {
-		webviewView.webview.options = {
-			enableScripts: true
-		};
-
-		checkKivy((isInstalled) => {
-			webviewView.webview.html = getSidebarHtml(isInstalled);
+		webviewView.webview.options = { enableScripts: true };
+		checkKivy(isInstalled => {
+			webviewView.webview.html = getSidebarHtml(this.context, isInstalled);
 		});
-
 		webviewView.webview.onDidReceiveMessage(message => {
 			if (message.command === 'openEditor') {
 				vscode.commands.executeCommand('kivy-editor.start');
 			}
 			if (message.command === 'installKivy') {
 				installKivy();
-				vscode.window.showWarningMessage(
-					'Please restart VS Code after installation completes.'
-				);
+				vscode.window.showWarningMessage('Please restart VS Code after installation completes.');
+			}
+			if (message.command === 'selectKvFile') {
+				vscode.window.showOpenDialog({
+					canSelectMany: false,
+					openLabel: 'Open .kv File',
+					filters: { 'KV files': ['kv'] }
+				}).then(fileUri => {
+					if (fileUri && fileUri[0]) {
+						selectedKvUri = fileUri[0];
+						webviewView.webview.postMessage({
+							command: 'kvFileSelected',
+							path: fileUri[0].fsPath
+						});
+					}
+				});
 			}
 		});
 	}
 }
 
 
+function getSidebarHtml(context, kivyInstalled) {
+	const sidebarPath = path.join(context.extensionPath, 'html', 'sidebar.html');
+	let html = fs.readFileSync(sidebarPath, 'utf8');
+
+	const statusBlock = kivyInstalled
+		? `<h3>Kivy is installed 🎉</h3><button onclick="vscode.postMessage({ command: 'openEditor' })">Open Kivy Editor</button>`
+		: `<h3>Kivy is not installed</h3><p>Click below to install Kivy. Then restart VS Code.</p><button onclick="vscode.postMessage({ command: 'installKivy' })">Install Kivy</button>`;
+
+	return html.replace('<!--STATUS_BLOCK-->', statusBlock);
+}
+
 
 function checkKivy(callback) {
 	exec('python -m pip show kivy', (error, stdout) => {
-		if (!error && stdout.toLowerCase().includes('name: kivy')) {
-			return callback(true);
-		} else {
-			return callback(false);
-		}
+		callback(!error && stdout.toLowerCase().includes('name: kivy'));
 	});
 }
-
 
 function installKivy() {
 	const terminal = vscode.window.createTerminal('Kivy Installer');
@@ -117,112 +165,7 @@ function installKivy() {
 	terminal.sendText('python -m pip install kivy[full]');
 }
 
-function getWebviewContent() {
-	return `
-	<!DOCTYPE html>
-	<html lang="en">
-	<head>
-		<meta charset="UTF-8">
-		<meta name="viewport" content="width=device-width, initial-scale=1.0">
-		<title>Kivy Editor</title>
-		<style>
-			body {
-				margin: 0;
-				padding: 0;
-				background-color: #1e1e1e;
-				color: white;
-				font-family: sans-serif;
-				display: flex;
-				height: 100vh;
-				overflow: hidden;
-			}
-			#sidebar {
-				width: 200px;
-				background-color: #2c2c2c;
-				padding: 10px;
-				border-right: 1px solid #444;
-			}
-			#canvas {
-				flex: 1;
-				position: relative;
-				background-color: #2a2a2a;
-			}
-			.draggable {
-				cursor: grab;
-				padding: 5px 10px;
-				margin-bottom: 10px;
-				background: #3c3c3c;
-				border: 1px solid #666;
-				border-radius: 5px;
-				user-select: none;
-			}
-			.kivy-widget {
-				position: absolute;
-				background: #4caf50;
-				padding: 5px 10px;
-				border-radius: 4px;
-				border: 1px solid #888;
-			}
-		</style>
-	</head>
-	<body>
-		<div id="sidebar">
-			<div id="buttonWidget" class="draggable" draggable="true">Button</div>
-		</div>
-		<div id="canvas"></div>
-
-		<script>
-			const vscode = acquireVsCodeApi();
-			const buttonWidget = document.getElementById('buttonWidget');
-			const canvas = document.getElementById('canvas');
-
-			let widgetList = [];
-			let widgetIdCounter = 1;
-
-			buttonWidget.addEventListener('dragstart', (e) => {
-				e.dataTransfer.setData('widget-type', 'button');
-			});
-
-			canvas.addEventListener('dragover', (e) => {
-				e.preventDefault()
-			});
-
-			canvas.addEventListener('drop', (e) => {
-				e.preventDefault();
-				const widgetType = e.dataTransfer.getData('widget-type');
-				const x = e.offsetX;
-				const y = e.offsetY;
-
-				const widgetID = \`widget_\${widgetIdCounter++}\`;
-				
-				widgetList.push({
-					id: widgetID,
-					type: widgetType,
-					x: x,
-					y: y
-				});
-
-				console.log('Current widget list:', widgetList);
-
-				const widget = document.createElement('div');
-				widget.className = 'kivy-widget';
-				widget.innerText = widgetType;
-				widget.style.left = x + 'px';
-				widget.style.top = y + 'px';
-				widget.setAttribute('data-id', widgetID);
-
-				canvas.appendChild(widget);
-			});
-		</script>
-	</body>
-	</html>
-	`;
-}
-
 
 function deactivate() {}
 
-module.exports = {
-	activate,
-	deactivate
-};
+module.exports = { activate, deactivate };

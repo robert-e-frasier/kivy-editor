@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+	<html lang="en">
+	<head>
+		<!-- CSS and JS are injected by extension.js -->
+		<meta charset="UTF-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<title>Kivy Editor</title>
+	</head>
+	<body>
+		<div id="toolbar">
+			<button onclick="vscode.postMessage({ command: 'selectKvFile' })">📂 Select .kv File</button>
+			<button id="submitKvButton" disabled>💾 Submit to .kv</button>
+			<p id="kvFilePath">No file selected</p>
+		</div>
+		<div id="main">
+			<div id="sidebar">
+				<div id="buttonWidget" class="draggable" draggable="true">Button</div>
+			</div>
+			<div id="canvas"></div>
+		</div>
+	</body>
+    </html>
